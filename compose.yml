@@ -1,0 +1,75 @@
+# ARCA — acervo + IA offline para sobreviver sem energia e sem internet.
+# Subir:  docker compose up -d --build      Abrir: http://localhost:8088
+name: arca
+
+x-llama: &llama
+  image: ghcr.io/ggml-org/llama.cpp@sha256:10a38e6cc91760ab157f0a0a8546218d35f4a314432a70298abfa3d096829ad7
+  restart: unless-stopped
+
+services:
+  app:
+    build: .
+    image: arca-app:latest
+    restart: unless-stopped
+    ports: ["${ARCA_PORT:-8088}:8080"]
+    environment:
+      DATABASE_URL: postgres://arca:arca@db:5432/arca
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://llm:8080/v1}
+      EMBED_BASE_URL: ${EMBED_BASE_URL:-http://embed:8080/v1}
+      CHAT_MODEL: ${CHAT_MODEL:-Qwen3.5-4B-Q4_K_M}
+      EMBED_MODEL: embeddinggemma-300M-Q8_0
+      KIWIX_URL: http://kiwix:8080/kiwix
+      CYBERCHEF_URL: http://cyberchef:80
+    volumes:
+      - ./content:/app/content:ro
+      - ./data/pdfs:/data/pdfs
+      - ./data/uploads:/data/uploads
+      - ./data/maps:/data/maps:ro
+      - ./data/zim:/data/zim:ro
+      - ./data/workspace:/workspace
+    depends_on: [db, kiwix]
+
+  db:
+    image: pgvector/pgvector:0.8.1-pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arca
+      POSTGRES_PASSWORD: arca
+      POSTGRES_DB: arca
+    volumes: [./data/pg:/var/lib/postgresql/data] # banco direto no HD externo
+    shm_size: 128mb
+
+  # Enciclopédias offline (arquivos .zim do Kiwix)
+  kiwix:
+    image: ghcr.io/kiwix/kiwix-serve:3.8.1
+    restart: unless-stopped
+    entrypoint: ["/usr/bin/dumb-init", "--", "/entrypoint.sh"]
+    volumes:
+      - ./data/zim:/data:ro
+      - ./docker/kiwix-entrypoint.sh:/entrypoint.sh:ro
+
+  # IA de conversa — llama.cpp em "router mode": cada .gguf em data/models/chat vira um modelo
+  # selecionável pela interface (carrega sob demanda, 1 por vez para caber na RAM).
+  llm:
+    <<: *llama
+    command: >
+      --host 0.0.0.0 --port 8080
+      --models-dir /models --models-max 1
+      --ctx-size ${LLM_CTX:-32768} --parallel 1 --jinja
+      --reasoning-format deepseek
+    volumes: [./data/models/chat:/models:ro]
+
+  # Embeddings para a busca semântica (RAG)
+  embed:
+    <<: *llama
+    command: >
+      --host 0.0.0.0 --port 8080
+      -m /models/embeddinggemma-300M-Q8_0.gguf --alias embeddinggemma-300M-Q8_0
+      --embeddings --ctx-size 2048 --batch-size 2048 --ubatch-size 2048 --parallel 2
+    volumes: [./data/models/embed:/models:ro]
+
+  # Canivete suíço de criptografia/codificação (aberto em /cyberchef)
+  cyberchef:
+    image: ghcr.io/gchq/cyberchef:10.24.0
+    restart: unless-stopped
+

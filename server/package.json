@@ -1,0 +1,31 @@
+{
+  "name": "arca-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --experimental-strip-types src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/server.mjs --external:pg-native --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@fastify/http-proxy": "11.6.6",
+    "@fastify/multipart": "10.1.7",
+    "@fastify/static": "10.1.8",
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0",
+    "@scure/base": "1.2.6",
+    "@scure/bip32": "1.7.0",
+    "@scure/bip39": "1.6.0",
+    "@scure/btc-signer": "1.8.1",
+    "fastify": "5.12.8",
+    "node-html-parser": "9.0.6",
+    "pg": "8.23.1",
+    "unpdf": "2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/pg": "8.23.1",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}

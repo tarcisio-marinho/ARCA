@@ -26,7 +26,7 @@ export function Markdown({ children, onCite }: { children: string; onCite?: (ref
               {children}
             </a>
           ),
-          // marca citações [D1] / [W3] como chips clicáveis
+          // marca citações [D1] / [W3] / [V1 12:34] como chips clicáveis
           p: ({ children }) => <p>{onCite ? cite(children, onCite) : children}</p>,
           li: ({ children }) => <li>{onCite ? cite(children, onCite) : children}</li>,
         }}
@@ -37,23 +37,30 @@ export function Markdown({ children, onCite }: { children: string; onCite?: (ref
   )
 }
 
+const CITE = /(\[(?:[DW]\d+|V\d+(?: \d{1,2}:\d{2}(?::\d{2})?)?)\])/g
+const CITE_ONE = /^\[([DW]\d+|V\d+)(?: (\d{1,2}:\d{2}(?::\d{2})?))?\]$/
+
 function cite(children: any, onCite: (r: string) => void): any {
   const map = (c: any, i: number): any => {
     if (typeof c !== 'string') return c
-    const parts = c.split(/(\[[DW]\d+\])/g)
-    return parts.map((p, j) =>
-      /^\[[DW]\d+\]$/.test(p) ? (
+    const parts = c.split(CITE)
+    return parts.map((p, j) => {
+      const m = p.match(CITE_ONE)
+      if (!m) return p
+      const [, ref, time] = m
+      return (
         <button
           key={`${i}-${j}`}
-          onClick={() => onCite(p.slice(1, -1))}
-          className="mx-0.5 inline-flex -translate-y-px items-center rounded-md border border-gold/25 bg-gold/10 px-1.5 text-[11px] leading-[18px] font-bold text-gold hover:bg-gold/20"
+          onClick={() => onCite(ref)}
+          title={time ? `Abrir o vídeo em ${time}` : undefined}
+          className="mx-0.5 inline-flex -translate-y-px items-center gap-1 rounded-md border border-gold/25 bg-gold/10 px-1.5 text-[11px] leading-[18px] font-bold text-gold hover:bg-gold/20"
         >
-          {p.slice(1, -1)}
+          {ref.startsWith('V') && <span aria-hidden>▶</span>}
+          {ref}
+          {time && <span className="font-mono font-semibold">{time}</span>}
         </button>
-      ) : (
-        p
       )
-    )
+    })
   }
   return Array.isArray(children) ? children.map(map) : map(children, 0)
 }

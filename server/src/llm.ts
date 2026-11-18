@@ -43,6 +43,12 @@ export async function embed(texts: string[]): Promise<number[][] | null> {
   }
 }
 
+// Quantas gerações estão rodando agora (chat, tradutor…). Trabalho pesado de fundo (embeddings dos vídeos)
+// espera a IA ficar livre para não roubar CPU de quem está esperando resposta.
+let active = 0
+let lastActive = 0
+export const llmBusy = (coolDownMs = 8000) => active > 0 || Date.now() - lastActive < coolDownMs
+
 export type StreamDelta = { content?: string; reasoning?: string; toolCalls?: ToolCall[]; finish?: string }
 
 /**
@@ -52,6 +58,20 @@ export type StreamDelta = { content?: string; reasoning?: string; toolCalls?: To
 export async function chatStream(
   messages: ChatMessage[],
   opts: { tools?: ToolDef[]; temperature?: number; maxTokens?: number; signal?: AbortSignal; think?: boolean; model?: string; toolChoice?: 'auto' | 'required'; presencePenalty?: number; topP?: number },
+  onDelta: (d: StreamDelta) => void
+): Promise<{ content: string; reasoning: string; toolCalls: ToolCall[]; finish: string }> {
+  active++
+  try {
+    return await chatStreamInner(messages, opts, onDelta)
+  } finally {
+    active--
+    lastActive = Date.now()
+  }
+}
+
+async function chatStreamInner(
+  messages: ChatMessage[],
+  opts: Parameters<typeof chatStream>[1],
   onDelta: (d: StreamDelta) => void
 ): Promise<{ content: string; reasoning: string; toolCalls: ToolCall[]; finish: string }> {
   const model = opts.model ?? (await currentChatModel())

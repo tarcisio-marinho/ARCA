@@ -7,6 +7,7 @@ import {
   FileText,
   Globe,
   MagnifyingGlass,
+  MonitorPlay,
   PencilSimple,
   Plus,
   Robot,
@@ -27,7 +28,7 @@ import { Markdown } from '../components/Markdown'
 import { Badge, Button, cn, Modal, Select } from '../components/ui'
 import { api, del, post, put, sse, timeAgo } from '../lib/api'
 
-type Source = { ref: string; kind: 'doc' | 'wiki'; title: string; subtitle?: string; url: string }
+type Source = { ref: string; kind: 'doc' | 'wiki' | 'video'; title: string; subtitle?: string; url: string; t?: number }
 type ToolRun = { id: string; name: string; args: any; result?: string; ok?: boolean }
 type Msg = { id: number | string; role: 'user' | 'assistant'; content: string; meta?: { sources?: Source[]; tools?: { name: string; args: any; result: string }[]; think?: string }; live?: boolean; tools?: ToolRun[]; think?: string; error?: string }
 type Mode = 'assistant' | 'agent'
@@ -100,7 +101,7 @@ function Sources({ sources, onOpen }: { sources: Source[]; onOpen: (s: Source) =
           className="group flex max-w-[280px] items-center gap-1.5 rounded-lg border border-line-2 bg-base px-2 py-1 text-left text-[12px] hover:border-gold/40"
         >
           <span className="rounded bg-gold/10 px-1 text-[10.5px] font-bold text-gold">{s.ref}</span>
-          {s.kind === 'doc' ? <FileText className="shrink-0 text-fg-3" /> : <Globe className="shrink-0 text-fg-3" />}
+          {s.kind === 'video' ? <MonitorPlay className="shrink-0 text-gold" /> : s.kind === 'doc' ? <FileText className="shrink-0 text-fg-3" /> : <Globe className="shrink-0 text-fg-3" />}
           <span className="truncate text-fg-2 group-hover:text-fg">{s.title}</span>
           {s.subtitle && <span className="hidden truncate text-fg-3 sm:inline">· {s.subtitle}</span>}
         </button>
@@ -167,6 +168,7 @@ export default function Chat() {
       const patch = (fn: (m: Msg) => Msg) => setMsgs((all) => all.map((m) => (m.id === liveId ? fn(m) : m)))
       const ac = new AbortController()
       abortRef.current = ac
+      let finished = false
       try {
         await sse(
           `/api/chat/conversations/${convId}/send`,
@@ -178,7 +180,10 @@ export default function Chat() {
             else if (e.type === 'tool_end') patch((m) => ({ ...m, tools: (m.tools ?? []).map((t) => (t.id === e.id ? { ...t, result: e.result, ok: e.ok } : t)) }))
             else if (e.type === 'sources') patch((m) => ({ ...m, meta: { ...(m.meta ?? {}), sources: e.sources } }))
             else if (e.type === 'error') patch((m) => ({ ...m, error: e.message }))
-            else if (e.type === 'done') patch((m) => ({ ...m, live: false, id: e.messageId }))
+            else if (e.type === 'done') {
+              finished = true
+              patch((m) => ({ ...m, live: false, id: e.messageId }))
+            }
           },
           ac.signal
         )
@@ -186,6 +191,8 @@ export default function Chat() {
         if (!ac.signal.aborted) patch((m) => ({ ...m, error: (e as Error).message }))
       } finally {
         patch((m) => ({ ...m, live: false }))
+        // recarrega a versão salva (citações de vídeo normalizadas para [V1 12:34] com o tempo certo)
+        if (finished && convId) api<Msg[]>(`/api/chat/conversations/${convId}/messages`).then(setMsgs).catch(() => {})
         setBusy(false)
         abortRef.current = null
         qc.invalidateQueries({ queryKey: ['convs'] })
@@ -207,7 +214,7 @@ export default function Chat() {
   }, [])
 
   const openSource = (s: Source) => {
-    if (s.kind === 'doc') nav(s.url)
+    if (s.kind === 'doc' || s.kind === 'video') nav(s.url)
     else setViewer(s)
   }
   const openRef = (ref: string, m: Msg) => {

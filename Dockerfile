@@ -22,6 +22,6 @@ COPY --from=server /srv/dist/server.mjs /app/server.mjs
 COPY --from=web /web/dist /app/web
 ENV NODE_ENV=production PORT=8080 \
     WEB_DIR=/app/web CONTENT_DIR=/app/content PDF_DIR=/data/pdfs UPLOAD_DIR=/data/uploads \
-    MAPS_DIR=/data/maps ZIM_DIR=/data/zim WORKSPACE_DIR=/workspace
+    MAPS_DIR=/data/maps ZIM_DIR=/data/zim WORKSPACE_DIR=/workspace VIDEOS_DIR=/data/youtube
 EXPOSE 8080
 CMD ["node", "/app/server.mjs"]

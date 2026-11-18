@@ -19,7 +19,7 @@ const MIGRATIONS = [
      id SERIAL PRIMARY KEY,
      title TEXT NOT NULL,
      category TEXT NOT NULL DEFAULT 'geral',
-     source_type TEXT NOT NULL,           -- guide | pdf | upload
+     source_type TEXT NOT NULL,           -- guide | pdf | upload | video
      source_ref TEXT UNIQUE NOT NULL,     -- caminho/nome do arquivo
      content_hash TEXT NOT NULL,
      content TEXT NOT NULL,
@@ -122,6 +122,35 @@ const MIGRATIONS = [
      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
      broadcast_at TIMESTAMPTZ
    )`,
+  // Vídeos (mini YouTube offline). segments = transcrição limpa [[início, fim, texto], ...]; sig = cache (tamanho/mtime dos arquivos)
+  `CREATE TABLE IF NOT EXISTS videos (
+     id TEXT PRIMARY KEY,                -- id do YouTube
+     channel TEXT NOT NULL,              -- pasta em data/youtube
+     channel_title TEXT,
+     title TEXT NOT NULL,
+     upload_date DATE,
+     duration INT,
+     description TEXT,
+     url TEXT,
+     has_thumb BOOLEAN NOT NULL DEFAULT false,
+     sub_lang TEXT,                      -- pt-orig | pt | pt-BR | NULL (sem transcrição)
+     segments JSONB,
+     words INT NOT NULL DEFAULT 0,
+     n_chunks INT NOT NULL DEFAULT 0,
+     doc_id INT REFERENCES docs(id) ON DELETE SET NULL,
+     sig TEXT NOT NULL,
+     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  // trechos de vídeo guardam o tempo (s); t_start NULL = trecho de guia/PDF
+  `ALTER TABLE chunks ADD COLUMN IF NOT EXISTS t_start REAL`,
+  `ALTER TABLE chunks ADD COLUMN IF NOT EXISTS t_end REAL`,
+  // 1ª versão gravava o título do vídeo como heading (peso A no full-text): limpa sem perder embeddings
+  `UPDATE chunks SET heading = NULL WHERE t_start IS NOT NULL AND heading IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS chunks_pending_idx ON chunks(id) WHERE embedding IS NULL`,
+  // busca vetorial com índice (EmbeddingGemma = 768 dims), separada em docs e vídeos para um não afogar o outro
+  `CREATE INDEX IF NOT EXISTS chunks_doc_hnsw ON chunks USING hnsw ((embedding::vector(768)) vector_cosine_ops) WHERE t_start IS NULL`,
+  `CREATE INDEX IF NOT EXISTS chunks_video_hnsw ON chunks USING hnsw ((embedding::vector(768)) vector_cosine_ops) WHERE t_start IS NOT NULL`,
+  `DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET hnsw.ef_search = 100', current_database()); END $$`,
 ]
 
 export async function migrate() {

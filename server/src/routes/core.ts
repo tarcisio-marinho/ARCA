@@ -44,7 +44,10 @@ export async function coreRoutes(app: FastifyInstance) {
       ping(config.embedBaseUrl.replace(/\/v1$/, '') + '/health'),
       listBooks().catch(() => null),
       one<{ docs: string; chunks: string; pending: string }>(
-        `SELECT (SELECT count(*) FROM docs) docs, (SELECT count(*) FROM chunks) chunks, (SELECT count(*) FROM chunks WHERE embedding IS NULL) pending`
+        // vídeos ficam de fora (têm contador próprio em /api/videos/index)
+        `SELECT (SELECT count(*) FROM docs WHERE source_type <> 'video') docs,
+                (SELECT count(*) FROM chunks c JOIN docs d ON d.id=c.doc_id WHERE d.source_type <> 'video') chunks,
+                (SELECT count(*) FROM chunks WHERE embedding IS NULL AND t_start IS NULL) pending`
       ),
       currentChatModel(),
     ])
@@ -100,7 +103,7 @@ export async function coreRoutes(app: FastifyInstance) {
               d.updated_at "updatedAt",
               (SELECT count(*) FROM chunks c WHERE c.doc_id=d.id)::int chunks,
               (SELECT count(*) FROM chunks c WHERE c.doc_id=d.id AND c.embedding IS NULL)::int pending
-       FROM docs d ${type ? 'WHERE d.source_type = ANY($1)' : ''} ORDER BY d.category, d.title`,
+       FROM docs d ${type ? 'WHERE d.source_type = ANY($1)' : "WHERE d.source_type <> 'video'"} ORDER BY d.category, d.title`,
       type ? [type.split(',')] : []
     )
   })
@@ -146,7 +149,9 @@ export async function coreRoutes(app: FastifyInstance) {
   })
   // busca literal (Ctrl+F) em guias, PDFs, uploads e notas
   app.get<{ Querystring: { q?: string } }>('/api/find', async (req) => findEverywhere(req.query.q ?? ''))
-  app.post<{ Body: { q: string; limit?: number } }>('/api/docs/search', async (req) => searchKb(req.body.q, req.body.limit ?? 10))
+  app.post<{ Body: { q: string; limit?: number; scope?: 'docs' | 'videos' } }>('/api/docs/search', async (req) =>
+    searchKb(req.body.q, req.body.limit ?? 10, req.body.scope === 'videos' ? 'videos' : 'docs')
+  )
 
   // ───────── toolkit ─────────
   app.get('/api/tools', async () => listOps())

@@ -7,6 +7,7 @@ import { one, q } from './db.ts'
 import { searchKb } from './kb.ts'
 import { readArticle, searchAll } from './kiwix.ts'
 import { chatStream, type ChatMessage, type ToolCall, type ToolDef } from './llm.ts'
+import { fmtTime } from './vtt.ts'
 import { listOps, runOp } from './toolkit.ts'
 
 export type Mode = 'assistant' | 'agent'
@@ -19,7 +20,7 @@ export type AgentEvent =
   | { type: 'done'; messageId: number }
   | { type: 'error'; message: string }
 
-export type Source = { ref: string; kind: 'doc' | 'wiki'; title: string; subtitle?: string; url: string }
+export type Source = { ref: string; kind: 'doc' | 'wiki' | 'video'; title: string; subtitle?: string; url: string; t?: number; videoId?: string }
 
 const SYSTEM_BASE = `Você é a ARCA, uma assistente que roda 100% offline numa máquina local, feita para ajudar uma família a atravessar um período sem energia elétrica e sem internet (cenário de ~30 dias).
 Responda SEMPRE em português do Brasil, direto ao ponto, com passos numerados quando for procedimento.
@@ -27,6 +28,7 @@ Responda SEMPRE em português do Brasil, direto ao ponto, com passos numerados q
 Regras:
 - Para qualquer pergunta factual (saúde, primeiros socorros, remédios, doenças, água, comida, sobrevivência, reparos, técnica), CHAME search_knowledge antes de responder. Use read_article/read_document para aprofundar quando o trecho não bastar.
 - Baseie a resposta nas fontes e cite-as no texto com o marcador entre colchetes, ex: [D2] ou [W5]. Não invente fontes.
+- Trechos de vídeo (refs V*) vêm das falas dos vídeos do canal Sobrevivencialismo. Quando algum trecho de vídeo for relevante, use-o e cite pelo menos um, sempre com o tempo indicado no trecho, no formato [V1 12:34], para o usuário poder abrir o vídeo naquele momento. As falas são legendas automáticas: podem ter palavras trocadas — corrija o sentido, sem inventar.
 - Saúde: dê primeiro o que fazer AGORA, depois sinais de alarme que exigem atendimento profissional. Doses de remédio só com fonte, informando dose por peso/idade e dose máxima diária. Deixe claro que não substitui um profissional quando houver um disponível.
 - Se as fontes não cobrirem, diga isso e responda com seu conhecimento geral, sinalizando que não veio do acervo.
 - Em contas (doses, litros, watts, autonomia), escreva a fórmula com as unidades e confira se o resultado faz sentido antes de responder.
@@ -45,7 +47,7 @@ const TOOLS_KNOWLEDGE: ToolDef[] = [
     function: {
       name: 'search_knowledge',
       description:
-        'Busca no acervo offline: guias curados em português, PDFs/documentos enviados e enciclopédias (Wikipédia PT, MedlinePlus, CDC, WikiMed, manuais militares de medicina, culinária, DIY, etc.). Retorna trechos com referência.',
+        'Busca no acervo offline: guias curados em português, PDFs/documentos enviados, falas dos vídeos do canal Sobrevivencialismo (com o minuto) e enciclopédias (Wikipédia PT, MedlinePlus, CDC, WikiMed, manuais militares de medicina, culinária, DIY, etc.). Retorna trechos com referência.',
       parameters: {
         type: 'object',
         properties: {
@@ -75,10 +77,10 @@ const TOOLS_KNOWLEDGE: ToolDef[] = [
     type: 'function',
     function: {
       name: 'read_document',
-      description: 'Lê mais de um guia/documento do acervo (refs D*), opcionalmente focando em termos.',
+      description: 'Lê mais de um guia/documento do acervo (refs D*), opcionalmente focando em termos. Com uma ref de vídeo (V*), lê a fala em volta daquele momento (~1 min antes e 3 min depois).',
       parameters: {
         type: 'object',
-        properties: { ref: { type: 'string', description: 'Referência, ex: D2' }, focus: { type: 'string' } },
+        properties: { ref: { type: 'string', description: 'Referência, ex: D2 ou V1' }, focus: { type: 'string' } },
         required: ['ref'],
       },
     },
@@ -214,7 +216,7 @@ function runCommand(command: string, timeoutMs = config.agentCommandTimeoutMs): 
 
 // ───────────── execução de ferramentas ─────────────
 
-type Ctx = { refs: Map<string, any>; sources: Map<string, Source>; counter: { d: number; w: number } }
+type Ctx = { refs: Map<string, any>; sources: Map<string, Source>; counter: { d: number; w: number; v: number } }
 
 async function execTool(name: string, args: any, ctx: Ctx): Promise<string> {
   switch (name) {
@@ -222,10 +224,11 @@ async function execTool(name: string, args: any, ctx: Ctx): Promise<string> {
       const query = String(args.query ?? '').trim()
       if (!query) return 'query vazia'
       const qEn = args.query_en ? String(args.query_en) : ''
-      const [kbPt, kbEn, wikiPt, wikiEn] = await Promise.all([
+      const [kbPt, kbEn, vids, wikiPt, wikiEn] = await Promise.all([
         searchKb(query, 6),
         // PDFs em inglês (ex.: FM 21-76) quase não aparecem para busca em português — busca nas duas línguas
         qEn ? searchKb(qEn, 5) : Promise.resolve([]),
+        searchKb(query, 20, 'videos'), // falas dos vídeos (PT); 20 candidatos para ter variedade de vídeos
         searchAll(query, { langs: ['por'], perBook: 3, limit: 6 }).catch(() => []),
         args.query_en ? searchAll(String(args.query_en), { langs: ['eng'], perBook: 2, limit: 8 }).catch(() => []) : Promise.resolve([]),
       ])
@@ -233,13 +236,25 @@ async function execTool(name: string, args: any, ctx: Ctx): Promise<string> {
       const kb: typeof kbPt = []
       const seen = new Set<number>()
       for (let i = 0; i < Math.max(kbPt.length, kbEn.length); i++)
-        for (const h of [kbPt[i], kbEn[i]]) if (h && !seen.has(h.chunkId) && kb.length < 8) (seen.add(h.chunkId), kb.push(h))
+        for (const h of [kbPt[i], kbEn[i]]) if (h && !seen.has(h.chunkId) && kb.length < 6) (seen.add(h.chunkId), kb.push(h))
       const lines: string[] = []
       for (const h of kb) {
         const ref = `D${++ctx.counter.d}`
         ctx.refs.set(ref, { kind: 'doc', docId: h.docId, title: h.title })
         ctx.sources.set(ref, { ref, kind: 'doc', title: h.title, subtitle: h.heading ?? h.category, url: `/docs/${h.docId}` })
-        lines.push(`[${ref}] ${h.title}${h.heading ? ' › ' + h.heading : ''}\n${h.text.slice(0, 700)}`)
+        lines.push(`[${ref}] ${h.title}${h.heading ? ' › ' + h.heading : ''}\n${h.text.slice(0, 650)}`)
+      }
+      // vídeos: até 3 trechos, no máximo 2 do mesmo vídeo
+      const perVideo = new Map<string, number>()
+      for (const h of vids) {
+        const vid = h.sourceRef?.split('/').pop() ?? ''
+        if (!vid || h.tStart == null || (perVideo.get(vid) ?? 0) >= 2 || [...perVideo.values()].reduce((a, b) => a + b, 0) >= 3) continue
+        perVideo.set(vid, (perVideo.get(vid) ?? 0) + 1)
+        const t = Math.floor(h.tStart)
+        const ref = `V${++ctx.counter.v}`
+        ctx.refs.set(ref, { kind: 'video', docId: h.docId, videoId: vid, t, title: h.title })
+        ctx.sources.set(ref, { ref, kind: 'video', title: h.title, subtitle: `${fmtTime(t)} · ${h.category.replace(/^Vídeos · /, '')}`, url: `/videos/${encodeURIComponent(vid)}?t=${t}`, t, videoId: vid })
+        lines.push(`[${ref}] Vídeo "${h.title}" — fala em ${fmtTime(t)}–${fmtTime(h.tEnd ?? t)} (cite como [${ref} ${fmtTime(t)}])\n${h.text.slice(0, 650)}`)
       }
       for (const h of [...wikiPt, ...wikiEn]) {
         const ref = `W${++ctx.counter.w}`
@@ -256,6 +271,14 @@ async function execTool(name: string, args: any, ctx: Ctx): Promise<string> {
       return `# ${a.title}\n${a.text}`
     }
     case 'read_document': {
+      const vr = ctx.refs.get(String(args.ref).trim().split(/\s+/)[0])
+      if (vr?.kind === 'video') {
+        const parts = await q<{ t_start: number; text: string }>(
+          'SELECT t_start, text FROM chunks WHERE doc_id=$1 AND t_start BETWEEN $2 AND $3 ORDER BY t_start',
+          [vr.docId, vr.t - 70, vr.t + 180]
+        )
+        return `# Vídeo: ${vr.title}\n${parts.map((p) => `[${fmtTime(p.t_start)}] ${p.text}`).join('\n\n')}`.slice(0, 5000)
+      }
       const r = ctx.refs.get(String(args.ref))
       if (!r || r.kind !== 'doc') return 'referência inválida (use um D* retornado pela busca)'
       const doc = await one<{ title: string; content: string }>('SELECT title, content FROM docs WHERE id=$1', [r.docId])
@@ -412,7 +435,7 @@ export async function runAgent(opts: {
   ]
 
   const tools = mode === 'agent' ? [...TOOLS_KNOWLEDGE, ...TOOLS_DEV] : TOOLS_KNOWLEDGE
-  const ctx: Ctx = { refs: new Map(), sources: new Map(), counter: { d: 0, w: 0 } }
+  const ctx: Ctx = { refs: new Map(), sources: new Map(), counter: { d: 0, w: 0, v: 0 } }
   const toolLog: { name: string; args: unknown; result: string }[] = []
   let finalText = ''
   let thinkText = ''
@@ -420,15 +443,21 @@ export async function runAgent(opts: {
 
   for (let step = 0; step < maxSteps; step++) {
     let stepText = ''
+    // Assistente, 1º passo: o objetivo é só chamar a busca. O 4B às vezes escreve antes, "responde de cabeça" ou finge a
+    // chamada em texto ("[search_knowledge] query: …") — então o texto desse passo não vai pro usuário.
+    const forced = mode === 'assistant' && step === 0
     const splitter = new StreamSplitter((e) => {
-      if (e.type === 'text') stepText += e.text
+      if (e.type === 'text') {
+        stepText += e.text
+        if (forced) return
+      }
       if (e.type === 'think') thinkText += e.text
       emit(e)
     })
     const res = await chatStream(messages, {
         tools,
         signal: opts.signal,
-        maxTokens: mode === 'agent' ? 4096 : 1800,
+        maxTokens: mode === 'agent' ? 4096 : forced ? 400 : 1800,
         think: opts.think,
         // Assistente: o primeiro passo SEMPRE consulta o acervo (modelos pequenos às vezes respondem "de cabeça")
         toolChoice: mode === 'assistant' && step === 0 ? 'required' : 'auto',
@@ -440,12 +469,18 @@ export async function runAgent(opts: {
       if (d.content) splitter.feed(d.content)
     })
     splitter.flush()
-    const calls = res.toolCalls.length ? res.toolCalls : parseToolBlocks(splitter.toolBlocks)
+    let calls = res.toolCalls.length ? res.toolCalls : parseToolBlocks(splitter.toolBlocks)
+    if (forced) {
+      // sem chamada válida: a própria Arca busca com a pergunta do usuário, e o modelo responde em cima disso
+      if (!calls.some((c) => c.function.name === 'search_knowledge'))
+        calls = [{ id: `auto_${Date.now()}`, type: 'function', function: { name: 'search_knowledge', arguments: JSON.stringify({ query: opts.userMessage.slice(0, 300) }) } }]
+      stepText = ''
+    }
     finalText += stepText
 
     if (!calls.length) break
 
-    messages.push({ role: 'assistant', content: stripTags(res.content) || null, tool_calls: calls })
+    messages.push({ role: 'assistant', content: forced ? null : stripTags(res.content) || null, tool_calls: calls })
     for (const call of calls) {
       let args: any = {}
       try {
@@ -462,7 +497,7 @@ export async function runAgent(opts: {
       }
       toolLog.push({ name: call.function.name, args, result: result.slice(0, 1500) })
       emit({ type: 'tool_end', id: call.id, name: call.function.name, result: result.slice(0, 4000), ok })
-      messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result.slice(0, 7000) })
+      messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result.slice(0, 8000) })
     }
     if (ctx.sources.size) emit({ type: 'sources', sources: [...ctx.sources.values()] })
     if (finalText && !finalText.endsWith('\n')) {
@@ -471,8 +506,13 @@ export async function runAgent(opts: {
     }
   }
 
+  // citações de vídeo no formato canônico [V1 12:34] com o tempo real do trecho (o modelo às vezes erra/omite o minuto)
+  finalText = finalText.replace(/\[V(\d+)(?:[\s,:\-–—@]+\d{1,2}:\d{2}(?::\d{2})?)?\]/g, (m, n) => {
+    const s = ctx.sources.get(`V${n}`)
+    return s?.t != null ? `[V${n} ${fmtTime(s.t)}]` : m
+  })
   // só guarda fontes realmente citadas (ou todas, se o modelo não citou nenhuma)
-  const cited = [...ctx.sources.values()].filter((s) => finalText.includes(`[${s.ref}]`))
+  const cited = [...ctx.sources.values()].filter((s) => finalText.includes(`[${s.ref}]`) || finalText.includes(`[${s.ref} `))
   const sources = cited.length ? cited : [...ctx.sources.values()].slice(0, 6)
   const saved = await one<{ id: number }>(
     'INSERT INTO messages(conversation_id, role, content, meta) VALUES($1,$2,$3,$4) RETURNING id',

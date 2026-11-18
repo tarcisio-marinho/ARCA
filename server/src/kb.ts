@@ -8,7 +8,7 @@ import { embed } from './llm.ts'
 const CHUNK = 1100
 const OVERLAP = 150
 
-export type Chunk = { heading: string | null; text: string }
+export type Chunk = { heading: string | null; text: string; tStart?: number; tEnd?: number }
 
 // HFS+ (HD externo) devolve nomes acentuados em NFD; APFS em NFC. Normaliza p/ o mesmo arquivo ter a mesma chave.
 const nfc = (s: string) => s.normalize('NFC')
@@ -95,7 +95,7 @@ async function pdfPages(buf: Buffer): Promise<string[]> {
 export async function upsertDoc(d: {
   title: string
   category: string
-  sourceType: 'guide' | 'pdf' | 'upload'
+  sourceType: 'guide' | 'pdf' | 'upload' | 'video'
   sourceRef: string
   content: string
   hash: string
@@ -123,9 +123,14 @@ export async function upsertDoc(d: {
       )
       id = r.rows[0].id
     }
-    for (let i = 0; i < d.chunks.length; i++) {
-      const c = d.chunks[i]
-      await client.query('INSERT INTO chunks(doc_id, idx, heading, text) VALUES($1,$2,$3,$4)', [id, i, c.heading, c.text])
+    // insere em lote (vídeo tem dezenas de trechos; 1 round-trip por trecho fica lento com milhares de vídeos)
+    for (let i = 0; i < d.chunks.length; i += 500) {
+      const part = d.chunks.slice(i, i + 500)
+      await client.query(
+        `INSERT INTO chunks(doc_id, idx, heading, text, t_start, t_end)
+         SELECT $1, i, h, t, ts, te FROM unnest($2::int[], $3::text[], $4::text[], $5::real[], $6::real[]) AS u(i, h, t, ts, te)`,
+        [id, part.map((_, k) => i + k), part.map((c) => c.heading), part.map((c) => c.text), part.map((c) => c.tStart ?? null), part.map((c) => c.tEnd ?? null)]
+      )
     }
     await client.query('COMMIT')
     return { id, changed: true }
@@ -234,7 +239,8 @@ export async function syncLibrary(log = console.log) {
 }
 
 let backfilling = false
-/** Gera embeddings pendentes em lotes. Roda em loop de fundo; se a IA estiver fora, tenta depois. */
+/** Gera embeddings pendentes de guias/PDFs/envios em lotes. Trechos de vídeo têm worker próprio (videos.ts),
+ *  então um guia novo nunca espera na fila atrás de milhares de falas. */
 export async function backfillEmbeddings(log = console.log) {
   if (backfilling) return
   backfilling = true
@@ -242,7 +248,7 @@ export async function backfillEmbeddings(log = console.log) {
     for (;;) {
       const rows = await q<{ id: number; heading: string | null; text: string; title: string }>(
         `SELECT c.id, c.heading, c.text, d.title FROM chunks c JOIN docs d ON d.id=c.doc_id
-         WHERE c.embedding IS NULL ORDER BY d.source_type='guide' DESC, c.id LIMIT 32`
+         WHERE c.embedding IS NULL AND c.t_start IS NULL ORDER BY d.source_type='guide' DESC, c.id LIMIT 32`
       )
       if (!rows.length) break
       const vecs = await embed(rows.map((r) => `title: ${r.title}${r.heading ? ' | ' + r.heading : ''} | text: ${r.text}`))
@@ -250,7 +256,7 @@ export async function backfillEmbeddings(log = console.log) {
       for (let i = 0; i < rows.length; i++) {
         await q('UPDATE chunks SET embedding=$1::vector WHERE id=$2', [`[${vecs[i].join(',')}]`, rows[i].id])
       }
-      const left = await one<{ n: string }>('SELECT count(*) n FROM chunks WHERE embedding IS NULL')
+      const left = await one<{ n: string }>('SELECT count(*) n FROM chunks WHERE embedding IS NULL AND t_start IS NULL')
       if (Number(left?.n) % 320 < 32) log(`[kb] embeddings pendentes: ${left?.n}`)
     }
   } finally {
@@ -266,19 +272,43 @@ export type KbHit = {
   heading: string | null
   text: string
   score: number
+  sourceRef?: string
+  tStart?: number | null
+  tEnd?: number | null
 }
 
-/** Busca híbrida: full-text (PT+EN, OR entre termos) + vetorial, fundidas por Reciprocal Rank Fusion. */
-export async function searchKb(query: string, limit = 8): Promise<KbHit[]> {
-  const fts = await q<KbHit & { rank: number }>(
+/** Busca híbrida: full-text (PT+EN, OR entre termos) + vetorial, fundidas por Reciprocal Rank Fusion.
+ *  scope: 'docs' = guias/PDFs/envios; 'videos' = falas dos vídeos (trechos com tempo). */
+export async function searchKb(query: string, limit = 8, scope: 'docs' | 'videos' = 'docs'): Promise<KbHit[]> {
+  const only = scope === 'videos' ? 'c.t_start IS NOT NULL' : 'c.t_start IS NULL'
+  const cols = `c.id "chunkId", d.id "docId", d.title, d.category, c.heading, c.text, d.source_ref "sourceRef", c.t_start "tStart", c.t_end "tEnd"`
+  // Vídeos (falas em PT, muito texto coloquial): só o stemmer PT e TODAS as palavras primeiro — em OR, trechos que só
+  // repetem "água" ganhavam de quem explica como purificar. Se vier pouco, completa com OR.
+  const ftsVideo = async (op: '&' | '|') =>
+    q<KbHit & { rank: number }>(
+      `WITH qq AS (SELECT to_tsquery('portuguese', nullif(replace(plainto_tsquery('portuguese', $1)::text, '&', '${op}'), '')) tq)
+       SELECT ${cols}, ts_rank_cd(c.tsv, tq) rank
+       FROM chunks c JOIN docs d ON d.id=c.doc_id, qq
+       WHERE ${only} AND tq IS NOT NULL AND c.tsv @@ tq
+       ORDER BY rank DESC LIMIT 30`,
+      [query]
+    ).catch(() => [] as (KbHit & { rank: number })[])
+  let fts: (KbHit & { rank: number })[] = []
+  if (scope === 'videos') {
+    fts = await ftsVideo('&')
+    if (fts.length < 10) {
+      const seen = new Set(fts.map((h) => h.chunkId))
+      fts = [...fts, ...(await ftsVideo('|')).filter((h) => !seen.has(h.chunkId))].slice(0, 30)
+    }
+  } else fts = await q<KbHit & { rank: number }>(
     `WITH qq AS (
        SELECT replace(plainto_tsquery('portuguese', $1)::text, '&', '|') AS pt,
               replace(plainto_tsquery('english', $1)::text, '&', '|') AS en
      )
-     SELECT c.id "chunkId", d.id "docId", d.title, d.category, c.heading, c.text,
+     SELECT ${cols},
             ts_rank_cd(c.tsv, to_tsquery('portuguese', nullif(pt,'')) || to_tsquery('english', nullif(en,''))) rank
      FROM chunks c JOIN docs d ON d.id=c.doc_id, qq
-     WHERE (pt <> '' AND c.tsv @@ to_tsquery('portuguese', pt)) OR (en <> '' AND c.tsv @@ to_tsquery('english', en))
+     WHERE ${only} AND ((pt <> '' AND c.tsv @@ to_tsquery('portuguese', pt)) OR (en <> '' AND c.tsv @@ to_tsquery('english', en)))
      ORDER BY rank DESC LIMIT 30`,
     [query]
   ).catch(() => [] as (KbHit & { rank: number })[])
@@ -286,13 +316,24 @@ export async function searchKb(query: string, limit = 8): Promise<KbHit[]> {
   let vec: (KbHit & { dist: number })[] = []
   const e = await embed([`task: search result | query: ${query}`])
   if (e?.[0]) {
-    vec = await q(
-      `SELECT c.id "chunkId", d.id "docId", d.title, d.category, c.heading, c.text, c.embedding <=> $1::vector dist
-       FROM chunks c JOIN docs d ON d.id=c.doc_id
-       WHERE c.embedding IS NOT NULL AND vector_dims(c.embedding) = $2
-       ORDER BY dist LIMIT 30`,
-      [`[${e[0].join(',')}]`, e[0].length]
-    )
+    const v = `[${e[0].join(',')}]`
+    vec =
+      e[0].length === 768
+        ? // usa o índice HNSW parcial (mesma expressão e mesmo predicado do índice)
+          await q(
+            `SELECT ${cols}, dist FROM (
+               SELECT c.id, (c.embedding::vector(768)) <=> $1::vector(768) dist FROM chunks c
+               WHERE ${only} AND c.embedding IS NOT NULL ORDER BY (c.embedding::vector(768)) <=> $1::vector(768) LIMIT 30
+             ) k JOIN chunks c ON c.id=k.id JOIN docs d ON d.id=c.doc_id ORDER BY dist`,
+            [v]
+          )
+        : await q(
+            `SELECT ${cols}, c.embedding <=> $1::vector dist
+             FROM chunks c JOIN docs d ON d.id=c.doc_id
+             WHERE ${only} AND c.embedding IS NOT NULL AND vector_dims(c.embedding) = $2
+             ORDER BY dist LIMIT 30`,
+            [v, e[0].length]
+          )
   }
   const scores = new Map<number, KbHit>()
   const add = (list: KbHit[], weight: number) =>

@@ -26,6 +26,7 @@ services:
       - ./data/uploads:/data/uploads
       - ./data/maps:/data/maps:ro
       - ./data/zim:/data/zim:ro
+      - ./data/youtube:/data/youtube:ro   # vídeos baixados (mini YouTube offline)
       - ./data/workspace:/workspace
     depends_on: [db, kiwix]
 

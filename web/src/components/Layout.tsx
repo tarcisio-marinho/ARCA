@@ -9,6 +9,7 @@ import {
   List,
   MagnifyingGlass,
   MapTrifold,
+  MonitorPlay,
   NotePencil,
   Robot,
   SidebarSimple,
@@ -39,6 +40,7 @@ const GROUPS: { label: string; items: Item[] }[] = [
     items: [
       { to: '/ia', label: 'IA Arca', icon: Robot },
       { to: '/biblioteca', label: 'Biblioteca', icon: Books },
+      { to: '/videos', label: 'Vídeos', icon: MonitorPlay },
       { to: '/documentos', label: 'Documentos & PDFs', icon: BookOpenText },
       { to: '/tradutor', label: 'Tradutor', icon: Translate },
     ],

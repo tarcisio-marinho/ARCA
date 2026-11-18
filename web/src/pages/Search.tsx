@@ -1,38 +1,24 @@
-import { ArrowLeft, ArrowSquareOut, Books, FilePdf, FirstAidKit, MagnifyingGlass, NotePencil, FileText } from '@phosphor-icons/react'
+import { ArrowLeft, ArrowSquareOut, Books, FilePdf, FirstAidKit, MagnifyingGlass, MonitorPlay, NotePencil, FileText } from '@phosphor-icons/react'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Badge, Button, Card, cn, Empty, Input, PageHeader, Spinner, Tabs } from '../components/ui'
+import { Highlighted } from '../components/Highlighted'
 import { api, fmtNum } from '../lib/api'
+import type { VideoFind } from '../lib/video'
+import { VideoHitCard } from '../components/VideoCards'
 
 type Snippet = { text: string; hl: [number, number][]; page?: number; heading?: string }
 type Hit = { kind: 'guide' | 'pdf' | 'upload' | 'note'; id: number; title: string; category: string; sourceRef?: string; count: number; titleMatch: boolean; snippets: Snippet[] }
-type FindResult = { query: string; mode: 'phrase' | 'words'; total: number; docs: number; hits: Hit[]; ms: number }
+type FindResult = { query: string; mode: 'phrase' | 'words'; total: number; docs: number; hits: Hit[]; videos: VideoFind | null; ms: number }
 type WikiHit = { book: string; bookTitle: string; title: string; path: string; snippet: string; lang: string }
-type Tab = 'all' | 'guide' | 'pdf' | 'note' | 'wiki'
+type Tab = 'all' | 'guide' | 'pdf' | 'note' | 'video' | 'wiki'
 
 const KIND = {
   guide: { label: 'Guia', tone: 'gold' as const, icon: FirstAidKit },
   pdf: { label: 'PDF', tone: 'info' as const, icon: FilePdf },
   upload: { label: 'Enviado', tone: 'neutral' as const, icon: FileText },
   note: { label: 'Nota', tone: 'neutral' as const, icon: NotePencil },
-}
-
-function Highlighted({ s }: { s: Snippet }) {
-  const parts: React.ReactNode[] = []
-  let last = 0
-  s.hl.forEach(([a, b], i) => {
-    if (a < last) return
-    parts.push(s.text.slice(last, a))
-    parts.push(
-      <mark key={i} className="find-mark">
-        {s.text.slice(a, b)}
-      </mark>
-    )
-    last = b
-  })
-  parts.push(s.text.slice(last))
-  return <>{parts}</>
 }
 
 function linkFor(h: Hit, q: string, s?: Snippet) {
@@ -69,7 +55,8 @@ export default function Search() {
     for (const h of data?.hits ?? []) c[h.kind === 'upload' ? 'pdf' : h.kind]++
     return c
   }, [data])
-  const visible = (data?.hits ?? []).filter((h) => tab === 'all' || (tab === 'pdf' ? h.kind === 'pdf' || h.kind === 'upload' : h.kind === tab))
+  const visible = tab === 'video' ? [] : (data?.hits ?? []).filter((h) => tab === 'all' || (tab === 'pdf' ? h.kind === 'pdf' || h.kind === 'upload' : h.kind === tab))
+  const vids = data?.videos
 
   if (reader)
     return (
@@ -93,7 +80,7 @@ export default function Search() {
         icon={<MagnifyingGlass weight="duotone" className="size-6" />}
         eyebrow="Busca"
         title="Buscar em tudo"
-        subtitle="Procura o termo exato em todos os guias, PDFs, documentos enviados, notas e enciclopédias — sem ligar para acentos ou maiúsculas."
+        subtitle="Procura o termo exato em todos os guias, PDFs, documentos enviados, notas, falas dos vídeos e enciclopédias — sem ligar para acentos ou maiúsculas."
       />
       <div className="mx-auto max-w-5xl space-y-5 px-6 py-6 md:px-8">
         <form
@@ -129,6 +116,7 @@ export default function Search() {
                   { value: 'guide', label: `Guias · ${counts.guide}` },
                   { value: 'pdf', label: `PDFs & docs · ${counts.pdf}` },
                   { value: 'note', label: `Notas · ${counts.note}` },
+                  { value: 'video', label: `Vídeos · ${vids?.videos ?? 0}` },
                   { value: 'wiki', label: `Enciclopédias · ${wikiLoading ? '…' : (wiki?.length ?? 0)}` },
                 ]}
               />
@@ -145,13 +133,13 @@ export default function Search() {
         )}
 
         {q && tab === 'all' && data && !visible.length && <div className="text-sm text-fg-3">Nenhum guia, PDF ou nota contém esse termo.</div>}
-        {q && tab !== 'wiki' && tab !== 'all' && data && !visible.length && (
+        {q && tab !== 'wiki' && tab !== 'all' && tab !== 'video' && data && !visible.length && (
           <Empty icon={<MagnifyingGlass className="size-6" />} title="Nada encontrado aqui">
             Tente outra grafia, um sinônimo, o termo em inglês (muitos PDFs são em inglês) ou pergunte à IA.
           </Empty>
         )}
 
-        {tab !== 'wiki' && (
+        {tab !== 'wiki' && tab !== 'video' && (
           <div className="space-y-3">
             {visible.map((h) => {
               const K = KIND[h.kind]
@@ -179,6 +167,36 @@ export default function Search() {
                 </Card>
               )
             })}
+          </div>
+        )}
+
+        {q && (tab === 'video' || (tab === 'all' && !!vids?.hits.length)) && (
+          <div className="space-y-2">
+            {tab === 'all' && (
+              <div className="flex items-center gap-2 pt-3 text-[11px] font-semibold tracking-[0.14em] text-fg-3 uppercase">
+                <MonitorPlay className="size-4" /> Vídeos — o que foi falado
+              </div>
+            )}
+            {tab === 'video' && vids?.mode === 'words' && (
+              <Card className="border-gold/20 p-3 text-[13px] text-fg-2">
+                A frase exata não é dita em nenhum vídeo — mostrando vídeos com <b>todas as palavras</b>.
+              </Card>
+            )}
+            {tab === 'video' && !vids?.hits.length && (
+              <Empty icon={<MonitorPlay className="size-6" />} title="Nenhum vídeo fala isso">
+                As legendas são automáticas e às vezes trocam palavras — tente um sinônimo.
+              </Empty>
+            )}
+            <div className="space-y-3">
+              {(tab === 'all' ? vids!.hits.slice(0, 4) : vids?.hits)?.map((h) => (
+                <VideoHitCard key={h.id} h={h} q={q} compact={tab === 'all'} />
+              ))}
+            </div>
+            {tab === 'all' && (vids?.hits.length ?? 0) > 4 && (
+              <button onClick={() => setTab('video')} className="block px-1 py-1 text-left text-xs text-fg-3 hover:text-gold">
+                Ver os {vids!.videos} vídeos ({fmtNum(vids!.total)} ocorrências) →
+              </button>
+            )}
           </div>
         )}
 

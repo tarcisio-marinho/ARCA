@@ -104,3 +104,12 @@ body {
   background: var(--color-gold, #e8b84a);
   color: #111;
 }
+
+/* legenda sobre o vídeo (área Vídeos) */
+video::cue {
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 1.05em;
+  line-height: 1.35;
+}

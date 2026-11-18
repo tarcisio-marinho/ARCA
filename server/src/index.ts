@@ -13,6 +13,8 @@ import { btcRoutes } from './routes/btc.ts'
 import { chatRoutes } from './routes/chat.ts'
 import { coreRoutes } from './routes/core.ts'
 import { translateRoutes } from './routes/translate.ts'
+import { videoRoutes } from './routes/videos.ts'
+import { embedVideos, scanVideos, warmFindIndex } from './videos.ts'
 
 const app = Fastify({ logger: { level: 'info' }, bodyLimit: 20 * 1024 * 1024 })
 
@@ -23,6 +25,8 @@ const webDir = path.resolve(config.webDir)
 await app.register(fastifyStatic, { root: webDir, prefix: '/', wildcard: false })
 // Mapas offline: PMTiles servido por HTTP Range direto do disco
 await app.register(fastifyStatic, { root: path.resolve(config.mapsDir), prefix: '/maps/', decorateReply: false, acceptRanges: true, cacheControl: true, maxAge: '7d' })
+// Vídeos (mp4 + thumbs) direto do disco com HTTP Range → o <video> consegue pular para qualquer ponto
+await app.register(fastifyStatic, { root: path.resolve(config.videosDir), prefix: '/media/youtube/', decorateReply: false, acceptRanges: true, cacheControl: true, maxAge: '7d', index: false, list: false })
 
 // Enciclopédias (kiwix-serve) e CyberChef atrás do mesmo host → mesma origem pro iframe
 await app.register(httpProxy, { upstream: config.kiwixUrl.replace(/\/kiwix$/, ''), prefix: '/kiwix', rewritePrefix: '/kiwix', http2: false })
@@ -32,6 +36,7 @@ await app.register(coreRoutes)
 await app.register(chatRoutes)
 await app.register(translateRoutes)
 await app.register(btcRoutes)
+await app.register(videoRoutes)
 
 app.get('/api/health', async () => ({ ok: true }))
 
@@ -61,3 +66,13 @@ setInterval(async () => {
   await backfillEmbeddings(log).catch(() => {})
 }, 2 * 60_000)
 setInterval(() => retryOutbox().catch(() => {}), 5 * 60_000)
+
+// Vídeos: varredura (cache por assinatura → no-op se nada mudou) e embeddings num loop próprio,
+// separado do sync dos guias para um não esperar o outro.
+const videoCycle = async () => {
+  await scanVideos(log).catch((e) => app.log.error(e, 'scanVideos'))
+  warmFindIndex()
+  embedVideos(log).catch(() => {})
+}
+setTimeout(videoCycle, 5_000)
+setInterval(videoCycle, 10 * 60_000)

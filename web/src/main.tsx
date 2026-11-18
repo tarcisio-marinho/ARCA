@@ -20,6 +20,8 @@ const Notes = lazy(() => import('./pages/Notes'))
 const System = lazy(() => import('./pages/System'))
 const Search = lazy(() => import('./pages/Search'))
 const Translate = lazy(() => import('./pages/Translate'))
+const Videos = lazy(() => import('./pages/Videos'))
+const VideoPlayer = lazy(() => import('./pages/VideoPlayer'))
 
 const qc = new QueryClient({ defaultOptions: { queries: { staleTime: 15_000, retry: 1, refetchOnWindowFocus: false } } })
 const S = (el: React.ReactNode) => (
@@ -65,6 +67,8 @@ const router = createBrowserRouter([
       { path: '/suprimentos', errorElement: <RouteError />, element: S(<Supplies />) },
       { path: '/notas', errorElement: <RouteError />, element: S(<Notes />) },
       { path: '/tradutor', errorElement: <RouteError />, element: S(<Translate />) },
+      { path: '/videos', errorElement: <RouteError />, element: S(<Videos />) },
+      { path: '/videos/:id', errorElement: <RouteError />, element: S(<VideoPlayer />) },
       { path: '/busca', errorElement: <RouteError />, element: S(<Search />) },
       { path: '/sistema', errorElement: <RouteError />, element: S(<System />) },
     ],

@@ -19,6 +19,8 @@ export const config = {
   mapsDir: env.MAPS_DIR ?? new URL('../../data/maps', import.meta.url).pathname,
   zimDir: env.ZIM_DIR ?? new URL('../../data/zim', import.meta.url).pathname,
   workspaceDir: env.WORKSPACE_DIR ?? new URL('../../data/workspace', import.meta.url).pathname,
+  // Canais do YouTube baixados (1 subpasta por canal: <id>.mp4, <id>.<lang>.vtt, thumbs/, meta/)
+  videosDir: env.VIDEOS_DIR ?? new URL('../../data/youtube', import.meta.url).pathname,
   // Bitcoin: API Esplora (mempool.space / blockstream / sua própria instância). Só usada quando há internet.
   // Lista separada por vírgula = fallback em ordem (se um cair/limitar, tenta o próximo).
   esplora: {

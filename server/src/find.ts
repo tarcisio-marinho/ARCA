@@ -2,6 +2,7 @@
 // Ignora acentos, maiúsculas e quebras de linha (PDFs quebram frases no meio). Tudo em memória:
 // a base inteira tem poucos MB de texto, então varrer é mais rápido e previsível que índice.
 import { one, q } from './db.ts'
+import { findVideos } from './videos.ts'
 
 type Norm = { text: string; map: Int32Array } // map[i] = posição no texto original do char normalizado i
 
@@ -82,10 +83,11 @@ function plainMarkdown(md: string) {
 let cache: { key: string; entries: Entry[] } | null = null
 
 async function loadDocs(): Promise<Entry[]> {
-  const sig = await one<{ k: string }>(`SELECT count(*)::text || ':' || coalesce(max(updated_at)::text,'') || ':' || coalesce(sum(id)::text,'') k FROM docs`)
+  // vídeos têm índice próprio (videos.ts): falas com tempo, sem duplicar ~20 MB de transcrição aqui
+  const sig = await one<{ k: string }>(`SELECT count(*)::text || ':' || coalesce(max(updated_at)::text,'') || ':' || coalesce(sum(id)::text,'') k FROM docs WHERE source_type <> 'video'`)
   if (cache && cache.key === sig?.k) return cache.entries
   const rows = await q<{ id: number; title: string; category: string; source_type: string; source_ref: string; content: string }>(
-    'SELECT id, title, category, source_type, source_ref, content FROM docs'
+    `SELECT id, title, category, source_type, source_ref, content FROM docs WHERE source_type <> 'video'`
   )
   const entries = rows.map((r) => {
     const pageOffsets: number[] = []
@@ -121,7 +123,7 @@ export type FindHit = {
   snippets: Snippet[]
 }
 
-function positions(hay: string, needle: string, max = 5000): number[] {
+export function positions(hay: string, needle: string, max = 5000): number[] {
   const out: number[] = []
   let i = hay.indexOf(needle)
   while (i >= 0 && out.length < max) {
@@ -197,7 +199,8 @@ function headingOf(e: Entry, origPos: number): string | undefined {
 export async function findEverywhere(query: string, opts: { maxDocs?: number; perDoc?: number } = {}) {
   const t0 = Date.now()
   const phrase = normQuery(query)
-  if (phrase.length < 2) return { query, mode: 'phrase' as const, total: 0, docs: 0, hits: [] as FindHit[], ms: 0 }
+  const videosP = findVideos(query, { perVideo: 3, maxVideos: 60 }).catch(() => null)
+  if (phrase.length < 2) return { query, mode: 'phrase' as const, total: 0, docs: 0, hits: [] as FindHit[], videos: null, ms: 0 }
   const perDoc = opts.perDoc ?? 4
   const entries = await loadDocs()
 
@@ -262,6 +265,8 @@ export async function findEverywhere(query: string, opts: { maxDocs?: number; pe
     total: hits.reduce((s, h) => s + h.count, 0),
     docs: hits.length,
     hits: hits.slice(0, opts.maxDocs ?? 200),
+    // grupo "Vídeos": falas dos vídeos (mesma regra: frase exata → todas as palavras), cada trecho com o segundo
+    videos: await videosP,
     ms: Date.now() - t0,
   }
 }

@@ -11,7 +11,8 @@ Guia do próprio sistema Arca: o que tem em cada página, como fazer boas pergun
 
 A Arca é um "kit de sobrevivência digital" que roda **100% offline** num notebook ou computador da casa. Ela junta:
 
-- **Guias curados em português** (como este) sobre emergência, água, comida, abrigo, comunicação e planos.
+- **Guias curados em português** (como este) sobre emergência, água, comida, abrigo, comunicação, planos e veículos/realocação.
+- **Vídeos offline** do canal Sobrevivencialismo, com transcrição pesquisável.
 - **Enciclopédias offline** (Wikipédia de medicina em português, MedlinePlus, CDC, manuais de medicina, culinária, faça-você-mesmo, entre outras).
 - **Mapas offline** do Brasil até nível de rua.
 - **Uma IA local** que lê esse acervo e responde perguntas citando as fontes.
@@ -27,7 +28,7 @@ Visão geral: autonomia estimada da casa (dias de água e comida, a partir de **
 
 ## Página Guias de sobrevivência
 
-Os guias em Markdown, organizados por categoria: Emergência, Água, Alimentos, Abrigo, Comunicação, Planos e Tecnologia.
+Os guias em Markdown, organizados por categoria: Emergência, Água, Alimentos, Abrigo, Comunicação, Planos, Tecnologia e **Veículos e realocação** (bateria 12 V, consertos na estrada, híbridos e elétricos, saída da capital para o interior).
 
 - São a fonte **mais confiável e mais rápida** do sistema: escritos para o contexto brasileiro, revisados, com doses e procedimentos.
 - Abrem instantaneamente e gastam quase nada de energia.
@@ -83,6 +84,7 @@ A IA marca de onde tirou cada informação:
 
 - **[D1], [D2]…** = **D**ocumento: guias da Arca ou PDFs/documentos enviados.
 - **[W1], [W3]…** = **W**iki/enciclopédia: artigos das bibliotecas offline (Wikipédia, MedlinePlus, CDC etc.).
+- **[V1 12:34]…** = **V**ídeo: fala de um vídeo do canal, com o minuto. Clicar abre o vídeo exatamente naquele ponto.
 
 Clique na fonte para abrir o trecho original. **Para doses de remédio e procedimentos médicos, sempre confira a fonte.** Se a IA disser que a informação não veio do acervo, trate com mais cautela.
 
@@ -112,6 +114,15 @@ Enciclopédias offline (formato ZIM, servidas pelo Kiwix). Exemplos do acervo: *
 - Use a busca para procurar em **todas as enciclopédias** de uma vez; filtre por idioma (português, inglês, todos).
 - Muitos termos técnicos e médicos rendem mais em inglês (ex.: "tetanus", "solar panel", "water purification").
 - Abra o artigo em nova aba para leitura completa.
+
+## Página Vídeos
+
+Os vídeos do canal Sobrevivencialismo, guardados no HD e tocando no navegador, sem internet.
+
+- **Grade** com busca pelo título e ordenação (mais novos, mais antigos, mais longos).
+- **Player** com legenda opcional e a **transcrição ao lado**, que acompanha o vídeo. Clique numa fala para pular até ela. **⌘F** procura dentro da transcrição; **Enter** e **Shift+Enter** pulam entre as ocorrências e o vídeo vai junto.
+- **Buscar nas falas** procura o que foi **dito** em todos os vídeos de uma vez e abre no segundo certo. A busca geral (⌘K) também mostra os vídeos.
+- As legendas são automáticas do YouTube: às vezes trocam palavras. Se não achar, tente um sinônimo. Vídeos marcados "sem transcrição" tocam normalmente, mas não aparecem na busca nem na IA.
 
 ## Página Documentos & PDFs
 

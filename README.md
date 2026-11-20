@@ -28,7 +28,7 @@ open http://localhost:8088
 - `youtube/<canal>/` — vídeos offline (`<id>.mp4`, legendas `<id>.pt-orig|pt|pt-BR.vtt`, `thumbs/`, `meta/`); montado read-only no `app`
 - `uploads/` — arquivos enviados pela UI; `workspace/` — área de trabalho do Agente dev
 
-Guias curados ficam em `content/` (Markdown com frontmatter). Editou/adicionou → reindexa sozinho em até 2 min.
+Guias curados ficam em `content/` (Markdown com frontmatter): emergência, água, alimentos, abrigo, comunicação, planos, tecnologia e veículos/realocação (bateria 12 V, consertos na estrada, híbridos e elétricos, saída da capital para o interior). Editou/adicionou → reindexa sozinho em até 2 min.
 
 ## IA
 
